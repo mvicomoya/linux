@@ -36,6 +36,10 @@ struct drm_atomic_state;
 struct drm_mode_fb_cmd2;
 struct drm_format_info;
 
+#if IS_ENABLED(CONFIG_DRM_ALLOCATOR_METADATA)
+typedef struct capability_set capability_set_t;
+#endif
+
 /**
  * struct drm_mode_config_funcs - basic driver provided mode setting functions
  *
@@ -69,6 +73,25 @@ struct drm_mode_config_funcs {
 	struct drm_framebuffer *(*fb_create)(struct drm_device *dev,
 					     struct drm_file *file_priv,
 					     const struct drm_mode_fb_cmd2 *mode_cmd);
+
+#if IS_ENABLED(CONFIG_DRM_ALLOCATOR_METADATA)
+
+	/**
+	 * @fb_create_with_metadata:
+	 *
+	 * Same as fb_create, taking deserialized allocator metadata as input
+	 * instead of &struct drm_mode_fb_cmd2.
+	 * See &struct drm_mode_fb_cmd_with_metadata and
+	 * &drm_mode_addfb_with_metadata() for details.
+	 */
+	struct drm_framebuffer *(*fb_create_with_metadata)(
+			struct drm_device *dev,	struct drm_file *file_priv,
+			__u32 width, __u32 height, __u32 pixel_format,
+			const __u32 handles[4],
+			const __u32 offsets[4],
+			const capability_set_t *metadata[4]);
+
+#endif
 
 	/**
 	 * @get_format_info:
