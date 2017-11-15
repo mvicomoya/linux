@@ -23,6 +23,10 @@
 #include <drm/drm_modeset_helper.h>
 #include <drm/drm_plane_helper.h>
 
+#if IS_ENABLED(CONFIG_DRM_ALLOCATOR_METADATA)
+#include <allocator/common.h>
+#endif
+
 /**
  * DOC: aux kms helpers
  *
@@ -156,3 +160,63 @@ int drm_crtc_init(struct drm_device *dev, struct drm_crtc *crtc,
 					 NULL);
 }
 EXPORT_SYMBOL(drm_crtc_init);
+
+#if IS_ENABLED(CONFIG_DRM_ALLOCATOR_METADATA)
+
+/**
+ * drm_helper_mode_fill_fb_struct_with_metadata - fill out framebuffer metadata
+ * @dev: DRM device
+ * @fb: drm_framebuffer object to fill out
+ * @width: fb width
+ * @height: fb height
+ * @pixel_format: fb format
+ * @metadata: metadata from the userspace fb creation request
+ *
+ * This helper can be used in a drivers fb_create callback to pre-fill the fb's
+ * metadata fields.
+ */
+void drm_helper_mode_fill_fb_struct_with_metadata(
+	struct drm_device *dev,
+	struct drm_framebuffer *fb,
+	uint32_t width,
+	uint32_t height,
+	uint32_t pixel_format,
+	const uint32_t offsets[4],
+	const capability_set_t *metadata[4])
+{
+	int i;
+
+	fb->dev = dev;
+	/* TODO: Let the driver pick its own format info */
+	fb->format = drm_format_info(pixel_format);
+	fb->width = width;
+	fb->height = height;
+	for (i = 0; i < fb->format->num_planes; i++) {
+		__u64 plane_width = drm_framebuffer_plane_width(fb->width, fb, i);
+		__u64 cpp = fb->format->cpp[i];
+		__u64 pitch_alignment = 1;
+		__u64 pitch;
+
+		drm_framebuffer_read_constraint(metadata[i],
+						CONSTRAINT_PITCH_ALIGNMENT,
+						(void *)&pitch_alignment);
+
+		/* Compute pitch, aligned to the pitch alignment constraint */
+		pitch = plane_width * cpp;
+		pitch += (pitch_alignment - 1);
+		pitch &= ~(pitch_alignment - 1);
+
+		fb->pitches[i] = pitch;
+		fb->offsets[i] = offsets[i];
+	}
+	for (; i < 4; i++) {
+		fb->pitches[i] = 0;
+		fb->offsets[i] = 0;
+	}
+	fb->modifier = 0;
+	fb->flags = 0;
+}
+EXPORT_SYMBOL(drm_helper_mode_fill_fb_struct_with_metadata);
+
+#endif
+

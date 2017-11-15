@@ -34,4 +34,19 @@ void drm_helper_mode_fill_fb_struct(struct drm_device *dev,
 int drm_crtc_init(struct drm_device *dev, struct drm_crtc *crtc,
 		  const struct drm_crtc_funcs *funcs);
 
+#if IS_ENABLED(CONFIG_DRM_ALLOCATOR_METADATA)
+
+typedef struct capability_set capability_set_t;
+
+void drm_helper_mode_fill_fb_struct_with_metadata(
+	struct drm_device *dev,
+	struct drm_framebuffer *fb,
+	uint32_t width,
+	uint32_t height,
+	uint32_t pixel_format,
+	const uint32_t offsets[4],
+	const capability_set_t *metadata[4]);
+
+#endif
+
 #endif
