@@ -149,6 +149,13 @@ config DRM_VM
 	bool
 	depends on DRM && MMU
 
+config DRM_ALLOCATOR_METADATA
+	bool
+	depends on DRM
+	default y
+	help
+	  Expose drm_mode_addfb_with_metadata
+
 source "drivers/gpu/drm/i2c/Kconfig"
 
 source "drivers/gpu/drm/arm/Kconfig"
