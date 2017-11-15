@@ -863,6 +863,10 @@ extern "C" {
 #define DRM_IOCTL_SYNCOBJ_RESET		DRM_IOWR(0xC4, struct drm_syncobj_array)
 #define DRM_IOCTL_SYNCOBJ_SIGNAL	DRM_IOWR(0xC5, struct drm_syncobj_array)
 
+#if IS_ENABLED(CONFIG_DRM_ALLOCATOR_METADATA)
+#define DRM_IOCTL_MODE_ADDFB_WITH_METADATA	DRM_IOWR(0xE1, struct drm_mode_fb_cmd_with_metadata)
+#endif
+
 /**
  * Device specific ioctls should only be in their respective headers
  * The device specific ioctl range is from 0x40 to 0x9f.

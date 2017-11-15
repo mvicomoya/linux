@@ -477,6 +477,31 @@ struct drm_mode_fb_cmd2 {
 	__u64 modifier[4]; /* ie, tiling, compress */
 };
 
+#if IS_ENABLED(CONFIG_DRM_ALLOCATOR_METADATA)
+
+struct drm_mode_fb_cmd_with_metadata {
+	__u32 fb_id;
+
+	/* XXX: Allocator assertion could be given instead */
+	__u32 width;
+	__u32 height;
+	__u32 pixel_format; /* fourcc code from drm_fourcc.h */
+
+	/*
+	 * In case of planar formats, this ioctl allows up to 4
+	 * buffer objects with allocator metadata per plane.
+	 */
+	__u32 handles[4];
+	__u32 offsets[4]; /* offset of each plane */
+
+	struct drm_mode_allocator_metadata {
+		__u64 size;
+		__u64 ptr;
+	} metadata[4];
+};
+
+#endif
+
 #define DRM_MODE_FB_DIRTY_ANNOTATE_COPY 0x01
 #define DRM_MODE_FB_DIRTY_ANNOTATE_FILL 0x02
 #define DRM_MODE_FB_DIRTY_FLAGS         0x03

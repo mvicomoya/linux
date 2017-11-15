@@ -411,6 +411,32 @@ int drm_framebuffer_read_constraint(const capability_set_t *set,
 }
 EXPORT_SYMBOL(drm_framebuffer_read_constraint);
 
+/**
+ * drm_mode_addfb_with_metadata - add an FB to the graphics configuration
+ * @dev: drm device for the ioctl
+ * @data: data pointer for the ioctl
+ * @file_priv: drm file for the ioctl call
+ *
+ * Add a new FB to the specified CRTC, given a user request with format. This is
+ * the metadata version of the addfb ioctl, which supports multi-planar
+ * framebuffers and uses fourcc codes as pixel format specifiers. It takes
+ * generic allocator metadata pointers to describe the layout and other
+ * properties of each plane (e.g. pitch alignment, page alignment, etc.).
+ *
+ * Called by the user via ioctl.
+ *
+ * Returns:
+ * Zero on success, negative errno on failure.
+ */
+int drm_mode_addfb_with_metadata(struct drm_device *dev,
+				 void *data, struct drm_file *file_priv)
+{
+	if (!drm_core_check_feature(dev, DRIVER_MODESET))
+		return -EINVAL;
+
+	return -ENOSYS;
+}
+
 #endif
 
 struct drm_mode_rmfb_work {

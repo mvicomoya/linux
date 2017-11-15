@@ -165,6 +165,10 @@ int drm_mode_addfb(struct drm_device *dev,
 		   void *data, struct drm_file *file_priv);
 int drm_mode_addfb2(struct drm_device *dev,
 		    void *data, struct drm_file *file_priv);
+#if IS_ENABLED(CONFIG_DRM_ALLOCATOR_METADATA)
+int drm_mode_addfb_with_metadata(struct drm_device *dev,
+		    void *data, struct drm_file *file_priv);
+#endif
 int drm_mode_rmfb(struct drm_device *dev,
 		  void *data, struct drm_file *file_priv);
 int drm_mode_getfb(struct drm_device *dev,
