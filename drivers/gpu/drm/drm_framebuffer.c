@@ -194,25 +194,50 @@ static int framebuffer_check_common(struct drm_device *dev,
 
 static int framebuffer_check_plane(__u32 plane, __u32 fb_width, __u32 fb_height,
 				   const struct drm_format_info *info,
-				   __u32 handle, __u32 pitch, __u32 offset,
-				   __u64 modifier, __u32 flags)
+				   __u32 handle, __u32 pitch, __u32 pitch_alignment,
+				   __u32 max_pitch, __u64 address_alignment,
+				   __u32 offset, __u64 modifier, __u32 flags)
 {
-	unsigned int width = fb_plane_width(fb_width, info, plane);
-	unsigned int height = fb_plane_height(fb_height, info, plane);
-	unsigned int cpp = info->cpp[plane];
+	__u32 width = fb_plane_width(fb_width, info, plane);
+	__u32 height = fb_plane_height(fb_height, info, plane);
+	__u32 cpp = info->cpp[plane];
 
 	if (!handle) {
 		DRM_DEBUG_KMS("no buffer object handle for plane %d\n", plane);
 		return -EINVAL;
 	}
 
-	if ((uint64_t) width * cpp > UINT_MAX)
+	if ((__u64) width * cpp > UINT_MAX) {
+		DRM_DEBUG_KMS("bad width %u for plane %d\n", width, plane);
 		return -ERANGE;
+	}
 
-	if ((uint64_t) height * pitch + offset > UINT_MAX)
+	if ((__u64) height * pitch + offset > UINT_MAX) {
+		DRM_DEBUG_KMS("bad width %u for plane %d\n", height, plane);
 		return -ERANGE;
+	}
 
-	if (pitch < width * cpp) {
+	if (address_alignment < 1 || address_alignment > UINT_MAX ||
+        (address_alignment & (address_alignment - 1)) != 0) {
+		DRM_DEBUG_KMS("bad address alignment %llu for plane %d\n",
+			      address_alignment, plane);
+		return -ERANGE;
+	}
+
+	if (pitch_alignment < 1 || pitch_alignment > UINT_MAX ||
+        (pitch_alignment & (pitch_alignment - 1)) != 0) {
+		DRM_DEBUG_KMS("bad pitch alignment %u for plane %d\n",
+			      pitch_alignment, plane);
+		return -ERANGE;
+	}
+
+	if (max_pitch > UINT_MAX) {
+		DRM_DEBUG_KMS("bad maximum pitch %u for plane %d\n",
+			      max_pitch, plane);
+		return -EINVAL;
+	}
+
+	if (pitch < width * cpp || pitch > max_pitch) {
 		DRM_DEBUG_KMS("bad pitch %u for plane %d\n", pitch, plane);
 		return -EINVAL;
 	}
@@ -260,7 +285,8 @@ static int framebuffer_check_cmd2(struct drm_device *dev,
 
 	for (i = 0; i < info->num_planes; i++) {
 		if ((ret = framebuffer_check_plane(i, r->width, r->height, info,
-						   r->handles[i], r->pitches[i], r->offsets[i],
+						   r->handles[i], r->pitches[i],
+						   1, UINT_MAX, 1, r->offsets[i],
 						   r->modifier[i], r->flags)))
 			return ret;
 
@@ -411,6 +437,118 @@ int drm_framebuffer_read_constraint(const capability_set_t *set,
 }
 EXPORT_SYMBOL(drm_framebuffer_read_constraint);
 
+static int
+framebuffer_check_with_metadata(struct drm_device *dev,
+				struct drm_mode_fb_cmd_with_metadata *r,
+				capability_set_t *metadata[4])
+{
+	const struct drm_format_info *info;
+	int ret = 0;
+	int i;
+
+	if (!dev->mode_config.funcs->fb_create_with_metadata)
+		return -ENOSYS;
+
+	if ((ret = framebuffer_check_common(dev, r->width, r->height,
+					    r->pixel_format, 0)))
+		return ret;
+
+	/* TODO: Let the driver pick its own format info */
+	info = __drm_format_info(r->pixel_format & ~DRM_FORMAT_BIG_ENDIAN);
+
+	/* Check planes */
+	for (i = 0; i < info->num_planes; i++) {
+		__u64 width = fb_plane_width(r->width, info, i);
+		__u64 cpp = info->cpp[i];
+		__u64 address_alignment = 1;
+		__u64 pitch_alignment = 1;
+		__u64 max_pitch = UINT_MAX;
+		__u64 pitch;
+
+		if (!metadata[i]) {
+			DRM_DEBUG_KMS("no buffer object metadata for plane %d\n", i);
+			return -EINVAL;
+		}
+
+		if (drm_framebuffer_read_constraint(metadata[i],
+						    CONSTRAINT_ADDRESS_ALIGNMENT,
+						    (void *)&address_alignment) ||
+		    drm_framebuffer_read_constraint(metadata[i],
+						    CONSTRAINT_PITCH_ALIGNMENT,
+						    (void *)&pitch_alignment) ||
+		    drm_framebuffer_read_constraint(metadata[i],
+						    CONSTRAINT_MAX_PITCH,
+						    (void *)&max_pitch)) {
+			DRM_DEBUG_KMS("bad metadata for plane %d\n", i);
+			return -EINVAL;
+		}
+
+		/* Compute pitch, aligned to the pitch alignment constraint */
+		pitch = width * cpp;
+		pitch += (pitch_alignment - 1);
+		pitch &= ~(pitch_alignment - 1);
+
+		if ((ret = framebuffer_check_plane(i, r->width, r->height, info,
+						   r->handles[i], pitch,
+						   pitch_alignment, max_pitch,
+						   address_alignment, r->offsets[i], 0, 0)))
+			return ret;
+	}
+
+	for (i = info->num_planes; i < 4; i++) {
+		if (r->handles[i]) {
+			DRM_DEBUG_KMS("buffer object handle for unused plane %d\n", i);
+			return -EINVAL;
+		}
+
+		if (r->offsets[i]) {
+			DRM_DEBUG_KMS("non-zero offset for unused plane %d\n", i);
+			return -EINVAL;
+		}
+
+		if (metadata[i]) {
+			DRM_DEBUG_KMS("metadata for unused plane %d\n", i);
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
+static void * deserialize_calloc(size_t n, size_t size)
+{
+	return kcalloc(n, size, GFP_KERNEL);
+}
+
+static int deserialize_capability_set(size_t data_size,
+				      const void __user *data_ptr,
+				      capability_set_t **capability_set)
+{
+	void *kdata_ptr;
+	int ret;
+
+	kdata_ptr = kcalloc(1, data_size, GFP_KERNEL);
+	if (!kdata_ptr)
+		return -1;
+
+	ret = copy_from_user(kdata_ptr, data_ptr, data_size);
+	if (ret != 0)
+		goto done;
+
+	ret = __deserialize_capability_set(data_size,
+					   kdata_ptr,
+					   capability_set,
+					   deserialize_calloc);
+
+	if (ret != 0)
+		__free_capability_set(1, *capability_set, kfree);
+
+done:
+	kfree(kdata_ptr);
+
+	return ret;
+}
+
 /**
  * drm_mode_addfb_with_metadata - add an FB to the graphics configuration
  * @dev: drm device for the ioctl
@@ -431,10 +569,57 @@ EXPORT_SYMBOL(drm_framebuffer_read_constraint);
 int drm_mode_addfb_with_metadata(struct drm_device *dev,
 				 void *data, struct drm_file *file_priv)
 {
+	struct drm_mode_fb_cmd_with_metadata *r = data;
+	capability_set_t *metadata[4] = { 0 };
+	struct drm_framebuffer *fb;
+	int ret = 0;
+	int i;
+
 	if (!drm_core_check_feature(dev, DRIVER_MODESET))
 		return -EINVAL;
 
-	return -ENOSYS;
+	/* Deserialize metadata from user space */
+	for (i = 0; i < 4; i++) {
+		if (r->metadata[i].ptr && r->metadata[i].size > 0) {
+			ret = deserialize_capability_set(r->metadata[i].size,
+							 (const void *)r->metadata[i].ptr,
+							 &metadata[i]);
+			if (ret) {
+				DRM_DEBUG_KMS("unable to deserialize metadata "
+					      "for plane %d\n", i);
+				ret = -EFAULT;
+				goto free_metadata;
+			}
+		}
+	}
+
+	ret = framebuffer_check_with_metadata(dev, r, metadata);
+	if (ret)
+		goto free_metadata;
+
+	fb = dev->mode_config.funcs->fb_create_with_metadata(dev, file_priv,
+			r->width, r->height, r->pixel_format, r->handles, r->offsets,
+			(const capability_set_t **)metadata);
+	if (IS_ERR(fb)) {
+		DRM_DEBUG_KMS("could not create framebuffer\n");
+		ret = PTR_ERR(fb);
+		goto free_metadata;
+	}
+
+	DRM_DEBUG_KMS("[FB:%d]\n", fb->base.id);
+	r->fb_id = fb->base.id;
+
+	/* Transfer ownership to the filp for reaping on close */
+	mutex_lock(&file_priv->fbs_lock);
+	list_add(&fb->filp_head, &file_priv->fbs);
+	mutex_unlock(&file_priv->fbs_lock);
+
+free_metadata:
+	for (i = 0; i < 4; i++) {
+		__free_capability_set(1, metadata[i], kfree);
+	}
+
+	return ret;
 }
 
 #endif
