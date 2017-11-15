@@ -306,4 +306,14 @@ int drm_framebuffer_plane_width(int width,
 int drm_framebuffer_plane_height(int height,
 				 const struct drm_framebuffer *fb, int plane);
 
+#if IS_ENABLED(CONFIG_DRM_ALLOCATOR_METADATA)
+
+typedef struct capability_set capability_set_t;
+
+int drm_framebuffer_read_constraint(const capability_set_t *set,
+				    __u32 name,
+				    void *value);
+
+#endif
+
 #endif

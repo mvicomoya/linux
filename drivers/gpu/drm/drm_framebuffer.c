@@ -28,6 +28,10 @@
 
 #include "drm_crtc_internal.h"
 
+#if IS_ENABLED(CONFIG_DRM_ALLOCATOR_METADATA)
+#include <allocator/allocator.h>
+#endif
+
 /**
  * DOC: overview
  *
@@ -338,6 +342,58 @@ int drm_mode_addfb2(struct drm_device *dev,
 
 	return 0;
 }
+
+#if IS_ENABLED(CONFIG_DRM_ALLOCATOR_METADATA)
+
+/**
+ * drm_framebuffer_read_constraint - Parse an allocator's capability set and
+ * return the requested constraint value if found
+ *
+ * @set: Allocator's capability set
+ * @name: Requested constraint name
+ * @value: Set if requested constraint is found; otherwise, untouched
+ */
+int drm_framebuffer_read_constraint(const capability_set_t *set,
+				    __u32 name,
+				    void *value)
+{
+	__u32 idx = set->num_constraints;
+	__u32 i;
+
+	/* Find the corresponding constraint, but also check it's set at most
+	 * once */
+	for (i = 0; i < set->num_constraints; i++) {
+		if (set->constraints[i].name == name) {
+			if (idx != set->num_constraints)
+				return -1;
+			idx = i;
+		}
+	}
+
+#define WRITE_CONSTRAINT(NAME, UNION_MEMBER, VALUE_TYPE) \
+	case CONSTRAINT_ ## NAME: \
+		*((VALUE_TYPE *)value) = set->constraints[idx].u.UNION_MEMBER.value; \
+		break
+
+	if (idx < set->num_constraints) {
+		switch (set->constraints[idx].name) {
+		WRITE_CONSTRAINT(ADDRESS_ALIGNMENT, address_alignment, __u64);
+		WRITE_CONSTRAINT(PITCH_ALIGNMENT, pitch_alignment, __u32);
+		WRITE_CONSTRAINT(MAX_PITCH, max_pitch, __u32);
+		default:
+			DRM_DEBUG_KMS("unknown constraint %u\n",
+				      set->constraints[idx].name);
+			break;
+		}
+	}
+
+#undef WRITE_CONSTRAINT
+
+	return 0;
+}
+EXPORT_SYMBOL(drm_framebuffer_read_constraint);
+
+#endif
 
 struct drm_mode_rmfb_work {
 	struct work_struct work;
