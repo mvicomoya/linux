@@ -149,85 +149,126 @@ static int fb_plane_height(int height,
 	return DIV_ROUND_UP(height, format->vsub);
 }
 
-static int framebuffer_check(struct drm_device *dev,
-			     const struct drm_mode_fb_cmd2 *r)
+static int framebuffer_check_common(struct drm_device *dev,
+				   __u32 width, __u32 height,
+				   __u32 pixel_format, __u32 flags)
 {
+	struct drm_mode_config *config = &dev->mode_config;
 	const struct drm_format_info *info;
-	int i;
+
+	if (flags & ~(DRM_MODE_FB_INTERLACED | DRM_MODE_FB_MODIFIERS)) {
+		DRM_DEBUG_KMS("bad framebuffer flags 0x%08x\n", flags);
+		return -EINVAL;
+	}
+
+	if ((config->min_width > width) || (width > config->max_width)) {
+		DRM_DEBUG_KMS("bad framebuffer width %d, should be >= %d && "
+			      "<= %d\n", width, config->min_width,
+			      config->max_width);
+		return -EINVAL;
+	}
+	if ((config->min_height > height) || (height > config->max_height)) {
+		DRM_DEBUG_KMS("bad framebuffer height %d, should be >= %d && "
+			      "<= %d\n", height, config->min_height,
+			      config->max_height);
+		return -EINVAL;
+	}
+
+	if (flags & DRM_MODE_FB_MODIFIERS && !config->allow_fb_modifiers) {
+		DRM_DEBUG_KMS("driver does not support fb modifiers\n");
+		return -EINVAL;
+	}
 
 	/* check if the format is supported at all */
-	info = __drm_format_info(r->pixel_format & ~DRM_FORMAT_BIG_ENDIAN);
+	info = __drm_format_info(pixel_format & ~DRM_FORMAT_BIG_ENDIAN);
 	if (!info) {
 		struct drm_format_name_buf format_name;
 		DRM_DEBUG_KMS("bad framebuffer format %s\n",
-		              drm_get_format_name(r->pixel_format,
-		                                  &format_name));
+			      drm_get_format_name(pixel_format,
+						  &format_name));
 		return -EINVAL;
 	}
 
-	/* now let the driver pick its own format info */
+	return 0;
+}
+
+static int framebuffer_check_plane(__u32 plane, __u32 fb_width, __u32 fb_height,
+				   const struct drm_format_info *info,
+				   __u32 handle, __u32 pitch, __u32 offset,
+				   __u64 modifier, __u32 flags)
+{
+	unsigned int width = fb_plane_width(fb_width, info, plane);
+	unsigned int height = fb_plane_height(fb_height, info, plane);
+	unsigned int cpp = info->cpp[plane];
+
+	if (!handle) {
+		DRM_DEBUG_KMS("no buffer object handle for plane %d\n", plane);
+		return -EINVAL;
+	}
+
+	if ((uint64_t) width * cpp > UINT_MAX)
+		return -ERANGE;
+
+	if ((uint64_t) height * pitch + offset > UINT_MAX)
+		return -ERANGE;
+
+	if (pitch < width * cpp) {
+		DRM_DEBUG_KMS("bad pitch %u for plane %d\n", pitch, plane);
+		return -EINVAL;
+	}
+
+	if (modifier && !(flags & DRM_MODE_FB_MODIFIERS)) {
+		DRM_DEBUG_KMS("bad fb modifier %llu for plane %d\n",
+			      modifier, plane);
+		return -EINVAL;
+	}
+
+	/* modifier specific checks: */
+	switch (modifier) {
+	case DRM_FORMAT_MOD_SAMSUNG_64_32_TILE:
+		/* NOTE: the pitch restriction may be lifted later if it turns
+		 * out that no hw has this restriction:
+		 */
+		if (info->format != DRM_FORMAT_NV12 ||
+				width % 128 || height % 32 ||
+				pitch % 128) {
+			DRM_DEBUG_KMS("bad modifier data for plane %d\n", plane);
+			return -EINVAL;
+		}
+		break;
+
+	default:
+		break;
+	}
+
+	return 0;
+}
+
+static int framebuffer_check_cmd2(struct drm_device *dev,
+				  const struct drm_mode_fb_cmd2 *r)
+{
+	const struct drm_format_info *info;
+	int ret;
+	int i;
+
+	if ((ret = framebuffer_check_common(dev, r->width, r->height,
+					    r->pixel_format, r->flags)))
+		return ret;
+
+	/* let the driver pick its own format info */
 	info = drm_get_format_info(dev, r);
 
-	if (r->width == 0) {
-		DRM_DEBUG_KMS("bad framebuffer width %u\n", r->width);
-		return -EINVAL;
-	}
-
-	if (r->height == 0) {
-		DRM_DEBUG_KMS("bad framebuffer height %u\n", r->height);
-		return -EINVAL;
-	}
-
 	for (i = 0; i < info->num_planes; i++) {
-		unsigned int width = fb_plane_width(r->width, info, i);
-		unsigned int height = fb_plane_height(r->height, info, i);
-		unsigned int cpp = info->cpp[i];
-
-		if (!r->handles[i]) {
-			DRM_DEBUG_KMS("no buffer object handle for plane %d\n", i);
-			return -EINVAL;
-		}
-
-		if ((uint64_t) width * cpp > UINT_MAX)
-			return -ERANGE;
-
-		if ((uint64_t) height * r->pitches[i] + r->offsets[i] > UINT_MAX)
-			return -ERANGE;
-
-		if (r->pitches[i] < width * cpp) {
-			DRM_DEBUG_KMS("bad pitch %u for plane %d\n", r->pitches[i], i);
-			return -EINVAL;
-		}
-
-		if (r->modifier[i] && !(r->flags & DRM_MODE_FB_MODIFIERS)) {
-			DRM_DEBUG_KMS("bad fb modifier %llu for plane %d\n",
-				      r->modifier[i], i);
-			return -EINVAL;
-		}
+		if ((ret = framebuffer_check_plane(i, r->width, r->height, info,
+						   r->handles[i], r->pitches[i], r->offsets[i],
+						   r->modifier[i], r->flags)))
+			return ret;
 
 		if (r->flags & DRM_MODE_FB_MODIFIERS &&
 		    r->modifier[i] != r->modifier[0]) {
 			DRM_DEBUG_KMS("bad fb modifier %llu for plane %d\n",
 				      r->modifier[i], i);
 			return -EINVAL;
-		}
-
-		/* modifier specific checks: */
-		switch (r->modifier[i]) {
-		case DRM_FORMAT_MOD_SAMSUNG_64_32_TILE:
-			/* NOTE: the pitch restriction may be lifted later if it turns
-			 * out that no hw has this restriction:
-			 */
-			if (r->pixel_format != DRM_FORMAT_NV12 ||
-					width % 128 || height % 32 ||
-					r->pitches[i] % 128) {
-				DRM_DEBUG_KMS("bad modifier data for plane %d\n", i);
-				return -EINVAL;
-			}
-			break;
-
-		default:
-			break;
 		}
 	}
 
@@ -265,33 +306,10 @@ drm_internal_framebuffer_create(struct drm_device *dev,
 				const struct drm_mode_fb_cmd2 *r,
 				struct drm_file *file_priv)
 {
-	struct drm_mode_config *config = &dev->mode_config;
 	struct drm_framebuffer *fb;
 	int ret;
 
-	if (r->flags & ~(DRM_MODE_FB_INTERLACED | DRM_MODE_FB_MODIFIERS)) {
-		DRM_DEBUG_KMS("bad framebuffer flags 0x%08x\n", r->flags);
-		return ERR_PTR(-EINVAL);
-	}
-
-	if ((config->min_width > r->width) || (r->width > config->max_width)) {
-		DRM_DEBUG_KMS("bad framebuffer width %d, should be >= %d && <= %d\n",
-			  r->width, config->min_width, config->max_width);
-		return ERR_PTR(-EINVAL);
-	}
-	if ((config->min_height > r->height) || (r->height > config->max_height)) {
-		DRM_DEBUG_KMS("bad framebuffer height %d, should be >= %d && <= %d\n",
-			  r->height, config->min_height, config->max_height);
-		return ERR_PTR(-EINVAL);
-	}
-
-	if (r->flags & DRM_MODE_FB_MODIFIERS &&
-	    !dev->mode_config.allow_fb_modifiers) {
-		DRM_DEBUG_KMS("driver does not support fb modifiers\n");
-		return ERR_PTR(-EINVAL);
-	}
-
-	ret = framebuffer_check(dev, r);
+	ret = framebuffer_check_cmd2(dev, r);
 	if (ret)
 		return ERR_PTR(ret);
 
